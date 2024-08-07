@@ -2,14 +2,14 @@ module "vpc" {
   source  = "punkerside/vpc/aws"
   version = "0.0.6"
 
-  name           = "${var.project}-${var.env}"
+  name           = var.service
   cidr_block_vpc = "10.0.0.0/16"
-  cidr_block_pri = ["10.0.0.0/19", "10.0.32.0/19", "10.0.64.0/19"]
-  cidr_block_pub = ["10.0.96.0/19", "10.0.128.0/19", "10.0.160.0/19"]
+  cidr_block_pri = ["10.0.0.0/18", "10.0.64.0/18"]
+  cidr_block_pub = ["10.0.128.0/18", "10.0.192.0/18"]
 }
 
 resource "aws_ecs_cluster" "main" {
-  name = "${var.project}-${var.env}-${var.service}"
+  name = var.service
 
   setting {
     name  = "containerInsights"
@@ -17,7 +17,7 @@ resource "aws_ecs_cluster" "main" {
   }
 
   tags = {
-	Name = "${var.project}-${var.env}-${var.service}"
+	Name = var.service
   }
 }
 
@@ -34,7 +34,7 @@ resource "aws_ecs_cluster_capacity_providers" "main" {
 }
 
 resource "aws_security_group" "main" {
-  name   = "${var.project}-${var.env}-${var.service}"
+  name   = var.service
   vpc_id = module.vpc.vpc.id
 
   egress {
@@ -52,12 +52,12 @@ resource "aws_security_group" "main" {
   }
 
   tags = {
-    Name = "${var.project}-${var.env}-${var.service}"
+    Name = var.service
   }
 }
 
 resource "aws_lb" "main" {
-  name               = "${var.project}-${var.env}-${var.service}"
+  name               = var.service
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.main.id]
@@ -112,6 +112,18 @@ resource "aws_iam_role_policy" "main" {
   })
 }
 
+resource "aws_cloudwatch_log_group" "main" {
+  name = "${var.project}-${var.env}-${var.service}"
+}
+
+resource "aws_lb_target_group" "main" {
+  name        = "${var.project}-${var.env}-${var.service}"
+  port        = 8070
+  protocol    = "HTTP"
+  vpc_id      = module.vpc.vpc.id
+  target_type = "ip"
+}
+
 resource "aws_ecs_task_definition" "main" {
   family = "${var.project}-${var.env}-${var.service}"
 
@@ -134,55 +146,16 @@ resource "aws_ecs_task_definition" "main" {
         }
       ]
 
-      # logConfiguration = {
-      #   logDriver = "awslogs"
-      #   options = {
-      #     awslogs-group         = aws_cloudwatch_log_group.main.name
-      #     awslogs-region        = data.aws_region.main.name
-      #     awslogs-stream-prefix = "ecs"
-      #   }
-      # }
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.main.name
+          awslogs-region        = data.aws_region.main.name
+          awslogs-stream-prefix = "ecs"
+        }
+      }
     }
   ])
-}
-
-resource "aws_lb_target_group" "main" {
-  name        = "${var.project}-${var.env}-${var.service}"
-  port        = 8070
-  protocol    = "HTTP"
-  vpc_id      = module.vpc.vpc.id
-  target_type = "ip"
-}
-
-resource "aws_acm_certificate" "main" {
-  domain_name       = "${var.service}.${var.domain}"
-  validation_method = "DNS"
-
-  tags = {
-    Name = "${var.project}-${var.env}-${var.service}"
-  }
-}
-
-resource "aws_route53_record" "main" {
-  allow_overwrite = true
-  name            = tolist(aws_acm_certificate.main.domain_validation_options)[0].resource_record_name
-  records         = [tolist(aws_acm_certificate.main.domain_validation_options)[0].resource_record_value]
-  type            = tolist(aws_acm_certificate.main.domain_validation_options)[0].resource_record_type
-  zone_id         = data.aws_route53_zone.main.zone_id
-  ttl             = 60
-}
-
-resource "aws_lb_listener" "main" {
-  load_balancer_arn = aws_lb.main.arn
-  port              = "443"
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-2016-08"
-  certificate_arn   = aws_acm_certificate.main.arn
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.main.arn
-  }
 }
 
 resource "aws_ecs_service" "main" {
@@ -223,6 +196,33 @@ resource "aws_ecs_service" "main" {
   }
 }
 
-resource "aws_cloudwatch_log_group" "main" {
-  name = "${var.project}-${var.env}-${var.service}"
+resource "aws_acm_certificate" "main" {
+  domain_name       = "${var.service}.${var.domain}"
+  validation_method = "DNS"
+
+  tags = {
+    Name = "${var.project}-${var.env}-${var.service}"
+  }
+}
+
+resource "aws_route53_record" "main" {
+  allow_overwrite = true
+  name            = tolist(aws_acm_certificate.main.domain_validation_options)[0].resource_record_name
+  records         = [tolist(aws_acm_certificate.main.domain_validation_options)[0].resource_record_value]
+  type            = tolist(aws_acm_certificate.main.domain_validation_options)[0].resource_record_type
+  zone_id         = data.aws_route53_zone.main.zone_id
+  ttl             = 60
+}
+
+resource "aws_lb_listener" "main" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  certificate_arn   = aws_acm_certificate.main.arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.main.arn
+  }
 }
